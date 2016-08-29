@@ -13,10 +13,22 @@ class NatsClient::Receiver
 
   CR_LF = "\r\n".freeze
 
-  COMMAND_REGEX = /\A(PING|PONG)\r\n\z/
-
+  INFO_COMMAND = 'INFO'.freeze
   PING_COMMAND = 'PING'.freeze
   PONG_COMMAND = 'PONG'.freeze
+
+  OK_RESPONSE = '+OK'.freeze
+  ERR_RESPONSE = '-ERR'.freeze
+
+  COMMANDS = {
+    INFO_COMMAND => /\A(\{.+\})\z/,
+    PING_COMMAND => nil,
+    PONG_COMMAND => nil,
+    OK_RESPONSE => nil,
+    ERR_RESPONSE => /\A'([^']+)'\z/
+  }
+
+  COMMAND_REGEX = /\A(#{COMMANDS.keys.map { |c| Regexp.escape(c) }.join('|')})(?:[ \t]+(.+)|)\r\n\z/o
 
   def initialize(handler)
     @buffer = "".force_encoding(Encoding::ASCII_8BIT)
@@ -39,7 +51,7 @@ class NatsClient::Receiver
         protocol_error!("Command length exceeded #{MAX_COMMAND}")
       else
         @buffer << bytes
-        process_command! if bytes.index(CR_LF)
+        process_command! while @buffer.index(CR_LF)
       end
     when CLOSED_MODE
       raise InvalidModeError.new(@mode.to_s)
@@ -50,19 +62,38 @@ class NatsClient::Receiver
 
   private
 
+  EMPTY_ARGS = [].freeze
+
+  def parse_args(command, args)
+    args_regex = COMMANDS.fetch(command)
+
+    return EMPTY_ARGS if args.nil? && args_regex.nil?
+
+    args_regex.match(args).to_a.drop(1)
+  end
+
   def process_command!
     line = @buffer.slice!(0, @buffer.index(CR_LF) + CR_LF.length)
-    protocol_error!("Invalid command line #{line.inspect}") unless line =~ COMMAND_REGEX
+    return protocol_error!("Invalid command line #{line.inspect}") unless line =~ COMMAND_REGEX
 
     command = $1
 
+    args = parse_args(command, $2)
+    return protocol_error!("Invalid arguments for #{command}: #{args.inspect}") unless args
+
     case command
+    when INFO_COMMAND
+      @handler.info_received!(JSON.parse(args[0]))
     when PING_COMMAND
       @handler.ping_received!
     when PONG_COMMAND
       @handler.pong_received!
+    when OK_RESPONSE
+      @handler.ok_received!
+    when ERR_RESPONSE
+      @handler.err_received!(args[0])
     else
-      protocol_error!("Invalid command #{command}")
+      raise NotImplementedError.new(command)
     end
   end
 

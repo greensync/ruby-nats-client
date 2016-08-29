@@ -11,23 +11,36 @@ describe NatsClient::Receiver do
 
     subject { input.each { |i| receiver << i }; handler.handled }
 
-    context "PING" do
-      let(:input) { ["PING\r\n"] }
+    {
+      [%{INFO {"server_id":"billy bob"}\r\n}] =>
+        [[:info_received!, {"server_id" => "billy bob"}]],
 
-      it "should trigger a ping" do
-        expect(subject).to eq [
-          [:ping_received!]
-        ]
-      end
-    end
+      ["PING\r\n"] =>
+        [[:ping_received!]],
+      ["PONG\r\n"] =>
+        [[:pong_received!]],
 
-    context "PONG" do
-      let(:input) { ["PONG\r\n"] }
+      ["+OK\r\n"] =>
+        [[:ok_received!]],
+      ["-ERR 'fishy'\r\n"] =>
+        [[:err_received!, 'fishy']],
 
-      it "should trigger a pong" do
-        expect(subject).to eq [
+      ["PING"] =>
+        [],
+      ["PO", "NG\r\n"] =>
+        [[:pong_received!]],
+      ["PING\r\nPONG\r\n"] =>
+        [
+          [:ping_received!],
           [:pong_received!]
-        ]
+        ],
+    }.each do |input, output|
+      context "with #{input.inspect}" do
+        let(:input) { input }
+
+        it "should convert to #{output.inspect}" do
+          expect(subject).to eq output
+        end
       end
     end
 

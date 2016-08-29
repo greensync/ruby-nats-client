@@ -20,7 +20,7 @@ module NatsClient::Handler
   def ok_received!
   end
 
-  def err_received!
+  def err_received!(message)
   end
 
   def cleanly_closed!
