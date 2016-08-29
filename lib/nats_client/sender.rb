@@ -5,7 +5,8 @@ class NatsClient::Sender
 
   class InvalidTopicError < RuntimeError; end
   class InvalidNameError < RuntimeError; end
-  class InvalidPayloadEncoding < RuntimeError; end
+  class InvalidPayloadEncodingError < RuntimeError; end
+  class InvalidNumberError < RuntimeError; end
 
   def initialize(stream)
     @stream = stream
@@ -14,6 +15,10 @@ class NatsClient::Sender
   CONNECT_SPACE = "CONNECT ".freeze
   PUB_SPACE = "PUB ".freeze
   SUB_SPACE = "SUB ".freeze
+  UNSUB_SPACE = "UNSUB ".freeze
+  PING_CR_LF = "PING\r\n".freeze
+  PONG_CR_LF = "PONG\r\n".freeze
+
   SPACE = " ".freeze
   CR_LF = "\r\n".freeze
 
@@ -62,6 +67,27 @@ class NatsClient::Sender
     self
   end
 
+  def unsub!(subscription_id, options = {})
+    max_msgs = options.fetch(:max_msgs, nil)
+
+    validate_name!(subscription_id)
+    validate_integer!(max_msgs) if max_msgs
+
+    @stream << UNSUB_SPACE << subscription_id
+    @stream << SPACE << max_msgs if max_msgs
+    @stream << CR_LF
+
+    self
+  end
+
+  def ping!
+    @stream << PING_CR_LF
+  end
+
+  def pong!
+    @stream << PONG_CR_LF
+  end
+
   private
 
   def validate_topic!(topic)
@@ -73,7 +99,11 @@ class NatsClient::Sender
   end
 
   def validate_payload!(payload)
-    raise InvalidPayloadEncoding.new(payload.encoding.name) unless payload.encoding == @stream.external_encoding
+    raise InvalidPayloadEncodingError.new(payload.encoding.name) unless payload.encoding == @stream.external_encoding
+  end
+
+  def validate_integer!(number)
+    raise InvalidNumberError.new(number.to_s) unless number.is_a?(Integer)
   end
 
 end

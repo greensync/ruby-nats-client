@@ -91,7 +91,7 @@ describe NatsClient::Sender do
       let(:payload) { "\u{1f4a9}".force_encoding('ascii-8bit') }
 
       it "should use the byte size" do
-        expect { subject }.to raise_error(NatsClient::Sender::InvalidPayloadEncoding, payload.encoding.name)
+        expect { subject }.to raise_error(NatsClient::Sender::InvalidPayloadEncodingError, payload.encoding.name)
       end
 
     end
@@ -158,5 +158,67 @@ describe NatsClient::Sender do
 
   end
 
+  describe "unsub!" do
+
+    let(:subscription_id) { "ABC456" }
+    let(:options) { {} }
+
+    subject { sender.unsub!(subscription_id, options); stream.string }
+
+    context "with no options" do
+
+      it "should format correctly" do
+        expect(subject).to eq("UNSUB ABC456\r\n")
+      end
+
+    end
+
+    context "with max_msgs" do
+
+      let(:options) { { max_msgs: 345 } }
+
+      it "should format correctly" do
+        expect(subject).to eq("UNSUB ABC456 345\r\n")
+      end
+
+    end
+
+    context "with invalid subscription id" do
+
+      let(:subscription_id) { '!!!!' }
+
+      it "should raise error" do
+        expect { subject }.to raise_error(NatsClient::Sender::InvalidNameError, '!!!!')
+      end
+
+    end
+
+    context "with invalid max msgs" do
+
+      let(:options) { { max_msgs: '!!!!' } }
+
+      it "should raise error" do
+        expect { subject }.to raise_error(NatsClient::Sender::InvalidNumberError, '!!!!')
+      end
+
+    end
+
+  end
+
+  describe "ping!" do
+    subject { sender.ping!; stream.string }
+
+    it "should work" do
+      expect(subject).to eq("PING\r\n")
+    end
+  end
+
+  describe "pong!" do
+    subject { sender.pong!; stream.string }
+
+    it "should work" do
+      expect(subject).to eq("PONG\r\n")
+    end
+  end
 
 end
