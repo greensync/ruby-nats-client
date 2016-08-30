@@ -15,6 +15,19 @@ describe NatsClient::Receiver do
       [%{INFO {"server_id":"billy bob"}\r\n}] =>
         [[:info_received!, {"server_id" => "billy bob"}]],
 
+      ["MSG topic subid 5\r\nhello\r\n"] =>
+        [
+          [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }]
+        ],
+
+      ["MSG", " topic subid 5\r\nhel", "lo\r\n"] =>
+        [
+          [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }]
+        ],
+
+
       ["PING\r\n"] =>
         [[:ping_received!]],
       ["PONG\r\n"] =>

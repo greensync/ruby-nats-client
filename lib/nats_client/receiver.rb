@@ -16,12 +16,14 @@ class NatsClient::Receiver
   INFO_COMMAND = 'INFO'.freeze
   PING_COMMAND = 'PING'.freeze
   PONG_COMMAND = 'PONG'.freeze
+  MSG_COMMAND = 'MSG'.freeze
 
   OK_RESPONSE = '+OK'.freeze
   ERR_RESPONSE = '-ERR'.freeze
 
   COMMANDS = {
     INFO_COMMAND => /\A(\{.+\})\z/,
+    MSG_COMMAND => /\A([a-z\d\.]+)\s+([a-z\d]+)\s+(\d+)\z/i,     # TODO more strict
     PING_COMMAND => nil,
     PONG_COMMAND => nil,
     OK_RESPONSE => nil,
@@ -34,6 +36,8 @@ class NatsClient::Receiver
     @buffer = "".force_encoding(Encoding::ASCII_8BIT)
     @mode = COMMAND_MODE
     @handler = handler
+
+    @current_message = nil
   end
 
   def closed?
@@ -45,22 +49,34 @@ class NatsClient::Receiver
   end
 
   def <<(bytes)
-    case @mode
-    when COMMAND_MODE
-      if bytes.length + @buffer.length > MAX_COMMAND
-        protocol_error!("Command length exceeded #{MAX_COMMAND}")
+    return protocol_error!("Buffer length exceeded #{MAX_BUFFER}") unless bytes.length + @buffer.length <= MAX_BUFFER
+
+    @buffer << bytes
+
+    loop do
+      case @mode
+      when COMMAND_MODE
+        break unless @buffer.index(CR_LF)
+        process_command!
+      when PAYLOAD_MODE
+        break unless @buffer.length >= @current_message.fetch(:payload_length) + 2
+        process_payload!
       else
-        @buffer << bytes
-        process_command! while @buffer.index(CR_LF)
+        raise InvalidModeError.new(@mode.to_s)
       end
-    when CLOSED_MODE
-      raise InvalidModeError.new(@mode.to_s)
-    else
-      raise "Invalid mode for bytes #{@mode}"
     end
   end
 
   private
+
+  def bytes_allowed?(length)
+    case @mode
+    when COMMAND_MODE
+      length + @buffer.length <= MAX_COMMAND
+    when CLOSED_MODE
+      false
+    end
+  end
 
   EMPTY_ARGS = [].freeze
 
@@ -69,7 +85,10 @@ class NatsClient::Receiver
 
     return EMPTY_ARGS if args.nil? && args_regex.nil?
 
-    args_regex.match(args).to_a.drop(1)
+    match = args_regex.match(args)
+    return nil unless match
+
+    match.to_a.drop(1)
   end
 
   def process_command!
@@ -79,9 +98,14 @@ class NatsClient::Receiver
     command = $1
 
     args = parse_args(command, $2)
-    return protocol_error!("Invalid arguments for #{command}: #{args.inspect}") unless args
+    return protocol_error!("Invalid arguments in line #{line.inspect}") unless args
 
     case command
+    when MSG_COMMAND
+      info = { topic: args[0], subscription_id: args[1], payload_length: args[2].to_i }
+      @handler.msg_started!(info)
+      start_payload!(info)
+
     when INFO_COMMAND
       @handler.info_received!(JSON.parse(args[0]))
     when PING_COMMAND
@@ -95,6 +119,22 @@ class NatsClient::Receiver
     else
       raise NotImplementedError.new(command)
     end
+  end
+
+  def start_payload!(info)
+    @current_message = info
+    @mode = PAYLOAD_MODE
+  end
+
+  def process_payload!
+    payload_length = @current_message.fetch(:payload_length)
+    return protocol_error!("Payload not followed by CRLF") unless @buffer[payload_length, 2] == CR_LF
+
+    payload = @buffer.slice!(0, payload_length)
+    @buffer.slice!(0, 2)
+
+    @mode = COMMAND_MODE
+    @handler.msg_received!(payload, @current_message)
   end
 
   def protocol_error!(message)
