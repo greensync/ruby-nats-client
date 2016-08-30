@@ -99,7 +99,7 @@ class NatsClient::Sender
   end
 
   def validate_payload!(payload)
-    raise InvalidPayloadEncodingError.new(payload.encoding.name) unless payload.encoding == @stream.external_encoding
+    # raise InvalidPayloadEncodingError.new(payload.encoding.name) unless payload.encoding == @stream.external_encoding
   end
 
   def validate_integer!(number)

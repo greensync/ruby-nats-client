@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+# Copyright (c) 2016 GreenSync Pty Ltd.  All rights reserved.
+
+require_relative '../lib/nats-client'
+
+require 'socket'
+
+start_time = Time.now.utc.to_f - 1
+messages = 0
+
+connection = NatsClient::Connection.new(
+  NatsClient::SocketConnector.new('localhost', 4222),
+  NatsClient::SocketConnector.new('localhost', 4223)
+)
+
+if ARGV.first == '--pub'
+  loop do
+    now = Time.now.utc
+    puts messages / (now.to_f - start_time) if messages % 20_000 == 0
+    connection.publish!("hello", "world\u1235#{now}")
+    connection.run!(1)
+    messages += 1
+  end
+else
+  connection.each("hello") do |topic, payload|
+    now = Time.now.utc
+    puts messages / (now.to_f - start_time) if messages % 20_000 == 0
+    puts topic, payload
+    connection.publish! "world", "says hello back!"
+    messages += 1
+  end
+end
