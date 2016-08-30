@@ -32,10 +32,9 @@ class NatsClient::Receiver
 
   COMMAND_REGEX = /\A(#{COMMANDS.keys.map { |c| Regexp.escape(c) }.join('|')})(?:[ \t]+(.+)|)\r\n\z/o
 
-  def initialize(handler)
+  def initialize
     @buffer = "".force_encoding(Encoding::ASCII_8BIT)
     @mode = COMMAND_MODE
-    @handler = handler
 
     @current_message = nil
   end
@@ -48,8 +47,8 @@ class NatsClient::Receiver
     raise "ASDFASDF"
   end
 
-  def <<(bytes)
-    return protocol_error!("Buffer length exceeded #{MAX_BUFFER}") unless bytes.length + @buffer.length <= MAX_BUFFER
+  def parse!(bytes, &block)
+    return protocol_error!("Buffer length exceeded #{MAX_BUFFER}", &block) unless bytes.length + @buffer.length <= MAX_BUFFER
 
     @buffer << bytes
 
@@ -57,10 +56,10 @@ class NatsClient::Receiver
       case @mode
       when COMMAND_MODE
         break unless @buffer.index(CR_LF)
-        process_command!
+        process_command!(&block)
       when PAYLOAD_MODE
         break unless @buffer.length >= @current_message.fetch(:payload_length) + 2
-        process_payload!
+        process_payload!(&block)
       else
         raise InvalidModeError.new(@mode.to_s)
       end
@@ -79,12 +78,14 @@ class NatsClient::Receiver
   end
 
   EMPTY_ARGS = [].freeze
+  EMPTY_HASH = {}.freeze
 
   def parse_args(command, args)
     args_regex = COMMANDS.fetch(command)
 
     return EMPTY_ARGS if args.nil? && args_regex.nil?
 
+    args.strip!
     match = args_regex.match(args)
     return nil unless match
 
@@ -103,19 +104,26 @@ class NatsClient::Receiver
     case command
     when MSG_COMMAND
       info = { topic: args[0], subscription_id: args[1], payload_length: args[2].to_i }
-      @handler.msg_started!(info)
+      yield :msg_started, info
+
       start_payload!(info)
 
     when INFO_COMMAND
-      @handler.info_received!(JSON.parse(args[0]))
+      info = JSON.parse(args[0])
+      yield :info_received, info
+
     when PING_COMMAND
-      @handler.ping_received!
+      yield :ping_received, EMPTY_HASH
+
     when PONG_COMMAND
-      @handler.pong_received!
+      yield :pong_received, EMPTY_HASH
+
     when OK_RESPONSE
-      @handler.ok_received!
+      yield :ok_received, EMPTY_HASH
+
     when ERR_RESPONSE
-      @handler.err_received!(args[0])
+      yield :err_received, { message: args[0] }
+
     else
       raise NotImplementedError.new(command)
     end
@@ -130,16 +138,19 @@ class NatsClient::Receiver
     payload_length = @current_message.fetch(:payload_length)
     return protocol_error!("Payload not followed by CRLF") unless @buffer[payload_length, 2] == CR_LF
 
+    message = @current_message
     payload = @buffer.slice!(0, payload_length)
     @buffer.slice!(0, 2)
 
+    @current_message = nil
     @mode = COMMAND_MODE
-    @handler.msg_received!(payload, @current_message)
+
+    yield :msg_received, message.merge(payload: payload)
   end
 
   def protocol_error!(message)
     @mode = CLOSED_MODE
-    @handler.protocol_error!(message)
+    yield :protocol_error, { message: message }
   end
 
 end
