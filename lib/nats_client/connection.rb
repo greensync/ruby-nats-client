@@ -54,11 +54,11 @@ class NatsClient::Connection
     @sender = NatsClient::Sender.new(@stream)
     @receiver = NatsClient::Receiver.new
 
+    @sender.connect!({})
+
     run!(CONNECTION_INFO_TIMEOUT) do
       break if @server_info
     end
-
-    @sender.connect!({})
 
     @subscriptions.each do |subscription_id, subscription|
       @sender.sub!(subscription.topic_filter, subscription_id, subscription.options)
