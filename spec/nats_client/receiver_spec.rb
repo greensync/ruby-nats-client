@@ -20,11 +20,24 @@ describe NatsClient::Receiver do
           [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
           [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }]
         ],
-
       ["MSG", " topic subid 5\r\nhel", "lo\r\n"] =>
         [
           [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
           [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }]
+        ],
+      ["MSG topic subid 5\r\nhello\r\nMSG topic2 subid2 7\r\ngoodbye\r\n"] =>
+        [
+          [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_started!, { topic: "topic2", subscription_id: "subid2", payload_length: 7 }],
+          [:msg_received!, "goodbye", { topic: "topic2", subscription_id: "subid2", payload_length: 7 }]
+        ],
+      ["MSG topic subid", " 5\r\nhello\r", "\nMSG topic2 subid2 ", "7\r\ngoodbye\r\n"] =>
+        [
+          [:msg_started!, { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_received!, "hello", { topic: "topic", subscription_id: "subid", payload_length: 5 }],
+          [:msg_started!, { topic: "topic2", subscription_id: "subid2", payload_length: 7 }],
+          [:msg_received!, "goodbye", { topic: "topic2", subscription_id: "subid2", payload_length: 7 }]
         ],
 
 
