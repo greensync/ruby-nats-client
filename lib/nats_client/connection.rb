@@ -138,7 +138,7 @@ class NatsClient::Connection
   def read_bytes(finish_time)
     unless @stream.ready?
       timeout = finish_time ? finish_time - Time.now : 0
-      @stream.wait(timeout) if timeout > 0
+      wait_readable(@stream, timeout) if timeout > 0
     end
 
     @stream.read_nonblock(NatsClient::Receiver::MAX_BUFFER)
@@ -167,6 +167,11 @@ class NatsClient::Connection
     connector = @connectors[@connector_index]
     @connector_index = (@connector_index + 1) % @connectors.length
     connector
+  end
+
+  # JRuby 1.7 doesn't seem to have IO.wait
+  def wait_readable(stream, timeout)
+    IO.select([stream], nil, nil, timeout)
   end
 
 end

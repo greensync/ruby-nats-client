@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+JRUBY_OPTS="-J-server" rvm jruby-1.7.26@greensync-nats_client --create do $@
