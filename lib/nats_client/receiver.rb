@@ -25,7 +25,7 @@ class NatsClient::Receiver
 
   COMMANDS = {
     INFO_COMMAND => /\A(\{.+\})\z/,
-    MSG_COMMAND => /\A([a-z\d\.]+)\s+([a-z\d]+)\s+(\d+)\z/i,     # TODO more strict
+    MSG_COMMAND => /\A([a-z\d\.]+)\s+([a-z\d]+)\s+(?:([a-z\d\.]+)\s+)?(\d+)\z/i,     # TODO more strict
     PING_COMMAND => nil,
     PONG_COMMAND => nil,
     OK_RESPONSE => nil,
@@ -54,11 +54,14 @@ class NatsClient::Receiver
   end
 
   def parse!(bytes, &block)
+    return if closed?
     return protocol_error!("Buffer length exceeded #{MAX_BUFFER}", &block) unless bytes.length + @buffer.length <= MAX_BUFFER
 
     @buffer << bytes
 
     loop do
+      break if closed?
+
       case @mode
       when COMMAND_MODE
         break unless @buffer.index(CR_LF)
@@ -109,9 +112,10 @@ class NatsClient::Receiver
 
     case command
     when MSG_COMMAND
-      info = { topic: args[0], subscription_id: args[1], payload_length: args[2].to_i }
-      yield :msg_started, info
+      info = { topic: args[0], subscription_id: args[1], payload_length: args[3].to_i }
+      info[:reply_to] = args[2] if args[2]
 
+      yield :msg_started, info
       start_payload!(info)
 
     when INFO_COMMAND

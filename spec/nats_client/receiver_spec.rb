@@ -49,6 +49,11 @@ describe NatsClient::Receiver do
           [:msg_received, { topic: "topic2", subscription_id: "subid2", payload_length: 7, payload: "goodbye" }]
         ],
 
+      ["MSG world A1 hello.reply 16\r\nabcdabcdabcdabcd\r\n"] =>
+        [
+          [:msg_started, { topic: "world", subscription_id: "A1", reply_to: "hello.reply", payload_length: 16 }],
+          [:msg_received, { topic: "world", subscription_id: "A1", reply_to: "hello.reply", payload_length: 16, payload: "abcdabcdabcdabcd" }]
+        ],
 
       ["PING\r\n"] =>
         [[:ping_received, {}]],
