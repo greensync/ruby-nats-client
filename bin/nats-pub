@@ -4,6 +4,7 @@
 require_relative '../lib/nats-client'
 
 require 'socket'
+Thread.abort_on_exception = true
 
 start_time = Time.now.utc.to_f - 1
 messages = 0
@@ -34,11 +35,7 @@ else
     end
   end
 
-  Thread.new do
-    NatsClient::SimpleMessageStream.new(connection, "world").each do |topic, payload|
-      puts topic, payload
-    end
+  NatsClient::SimpleMessageStream.new(connection, "world").each do |topic, payload|
+    puts topic, payload
   end
-
-  sleep 1000
 end

@@ -3,6 +3,8 @@
 
 class NatsClient::Receiver
 
+  class InvalidModeError < StandardError; end
+
   MAX_BUFFER = 1024*1024
   MAX_COMMAND = 8192
 
@@ -33,6 +35,10 @@ class NatsClient::Receiver
   COMMAND_REGEX = /\A(#{COMMANDS.keys.map { |c| Regexp.escape(c) }.join('|')})(?:[ \t]+(.+)|)\r\n\z/o
 
   def initialize
+    reset!
+  end
+
+  def reset!
     @buffer = "".force_encoding(Encoding::ASCII_8BIT)
     @mode = COMMAND_MODE
 
@@ -44,7 +50,7 @@ class NatsClient::Receiver
   end
 
   def close!
-    raise "ASDFASDF"
+    @mode = CLOSED_MODE
   end
 
   def parse!(bytes, &block)
@@ -92,14 +98,14 @@ class NatsClient::Receiver
     match.to_a.drop(1)
   end
 
-  def process_command!
+  def process_command!(&block)
     line = @buffer.slice!(0, @buffer.index(CR_LF) + CR_LF.length)
-    return protocol_error!("Invalid command line #{line.inspect}") unless line =~ COMMAND_REGEX
+    return protocol_error!("Invalid command line #{line.inspect}", &block) unless line =~ COMMAND_REGEX
 
     command = $1
 
     args = parse_args(command, $2)
-    return protocol_error!("Invalid arguments in line #{line.inspect}") unless args
+    return protocol_error!("Invalid arguments in line #{line.inspect}", &block) unless args
 
     case command
     when MSG_COMMAND
@@ -134,9 +140,9 @@ class NatsClient::Receiver
     @mode = PAYLOAD_MODE
   end
 
-  def process_payload!
+  def process_payload!(&block)
     payload_length = @current_message.fetch(:payload_length)
-    return protocol_error!("Payload not followed by CRLF") unless @buffer[payload_length, 2] == CR_LF
+    return protocol_error!("Payload not followed by CRLF", &block) unless @buffer[payload_length, 2] == CR_LF
 
     message = @current_message
     payload = @buffer.slice!(0, payload_length)

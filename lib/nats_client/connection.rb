@@ -28,8 +28,6 @@ class NatsClient::Connection
     end
   end
 
-  class ProtocolError < RuntimeError; end
-
   CONNECTION_MAX_TIMEOUT = 365 * 24 * 60 * 60   # a year...
 
   def initialize(*connectors)
@@ -41,48 +39,60 @@ class NatsClient::Connection
 
     @mutex = Mutex.new
 
-    reconnect!
+    @receiver = NatsClient::Receiver.new
   end
 
-  def reconnect!
+  def closed?
+    @mutex.synchronize do
+      @stream.nil? || @stream.closed?
+    end
+  end
+
+  def close!
+    puts "CLOSE"
+
+    @mutex.synchronize do
+      @stream.close if @stream && !@stream.closed?
+      @stream = @sender = @server_info = nil
+    end
+  end
+
+  def connect!
     puts "RECONNECT"
-    @stream.close if @stream && !@stream.closed?
 
-    @stream = @sender = @receiver = nil
-    @server_info = nil
+    @mutex.synchronize do
+      raise "already connected" unless @stream.nil? || @stream.closed?
 
-    @stream = next_connector!.open!
-    @sender = NatsClient::Sender.new(@stream)
-    @receiver = NatsClient::Receiver.new
-
-    @sender.connect!({})
-
-    @subscriptions.each do |subscription_id, subscription|
-      @sender.sub!(subscription.topic_filter, subscription_id, subscription.options)
+      @stream = next_connector!.open!
+      @sender = NatsClient::Sender.new(@stream)
+      @receiver.reset!
     end
 
-  rescue Errno::EPIPE, Errno::ECONNREFUSED, EOFError, NatsClient::Connection::ProtocolError
-    STDERR.puts "#{$!} retry"
-    sleep 1
-    retry
+    try_or_close do
+      @sender.connect!({})
+
+      @subscriptions.each do |subscription_id, subscription|
+        @sender.sub!(subscription.topic_filter, subscription_id, subscription.options)
+      end
+    end
   end
 
   def publish!(topic, payload, options = {})
-    retry_reconnect { @sender.pub!(topic, payload, options) }
+    retry_until_open { @sender.pub!(topic, payload, options) }
   end
 
   def subscribe!(topic_filter, options = {}, &block)
     subscription_id = generate_subscription_id!
 
     @subscriptions[subscription_id] = Subscription.new(topic_filter, options, block)
-    retry_reconnect { @sender.sub!(topic_filter, subscription_id, options) }
+    retry_until_open { @sender.sub!(topic_filter, subscription_id, options) }
 
     subscription_id
   end
 
   def unsubscribe!(subscription_id)
     @subscriptions.delete(subscription_id)
-    retry_reconnect { @sender.unsub!(subscription_id) }
+    retry_until_open { @sender.unsub!(subscription_id) }
   end
 
   def run!
@@ -98,10 +108,11 @@ class NatsClient::Connection
         when :msg_received
           notify_subscriptions(info)
         when :ping_received
-          retry_reconnect { @sender.pong! }
+          try_or_close { @sender.pong! }
         when :protocol_error
           STDERR.puts "Protocol Error: #{info.fetch(:message)}"
-          @mutex.synchronize { reconnect! }
+          close!
+          break
         end
       end
     end
@@ -120,11 +131,20 @@ class NatsClient::Connection
   end
 
   def read_bytes
+    connect! if closed?
+
     unless @stream.ready?
       wait_readable(@stream)
     end
 
-    retry_reconnect { @stream.read_nonblock(NatsClient::Receiver::MAX_BUFFER) }
+    @stream.read_nonblock(NatsClient::Receiver::MAX_BUFFER)
+
+  rescue Errno::EPIPE, Errno::ECONNRESET, Errno::ECONNREFUSED, EOFError
+    STDERR.puts "#{$!} read_bytes closing"
+    close!
+    sleep 1
+    retry
+
   rescue IO::WaitReadable
     sleep 0.1
     retry
@@ -136,17 +156,24 @@ class NatsClient::Connection
     subid
   end
 
-  def retry_reconnect
-    @mutex.synchronize do
-      begin
-        yield
-      rescue Errno::EPIPE, Errno::ECONNRESET, EOFError, NatsClient::Connection::ProtocolError
-        STDERR.puts "#{$!} retry"
-        sleep 1
-        reconnect!
-        retry
-      end
-    end
+  def try_or_close
+    @mutex.synchronize { yield }
+  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
+    STDERR.puts "#{$!} try or close retry"
+    close!
+  end
+
+  def wait_until_open
+    sleep 0.1 while closed?
+  end
+
+  def retry_until_open
+    wait_until_open
+    @mutex.synchronize { yield }
+  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
+    STDERR.puts "#{$!} retry until open"
+    close!
+    retry
   end
 
   def next_connector!
