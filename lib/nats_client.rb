@@ -3,6 +3,7 @@
 module NatsClient; end
 
 require 'io/wait'
+require 'thread'
 
 require 'json'
 

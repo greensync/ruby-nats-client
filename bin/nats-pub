@@ -13,20 +13,32 @@ connection = NatsClient::Connection.new(
   NatsClient::SocketConnector.new('localhost', 4223)
 )
 
+Thread.new { connection.run! }
+
 if ARGV.first == '--pub'
   loop do
     now = Time.now.utc
-    puts messages / (now.to_f - start_time) if messages % 20_000 == 0
-    connection.publish!("hello", "world\u1235#{now}")
-    connection.run!(1)
+    puts messages / (now.to_f - start_time) if messages % 1_000 == 0
+    connection.publish!("hello.in", "world\u1235#{now}")
+    sleep 1
     messages += 1
   end
 else
-  connection.each("hello") do |topic, payload|
-    now = Time.now.utc
-    puts messages / (now.to_f - start_time) if messages % 20_000 == 0
-    puts topic, payload
-    connection.publish! "world", "says hello back!"
-    messages += 1
+  Thread.new do
+    NatsClient::SimpleMessageStream.new(connection, "hello.>").each do |topic, payload|
+      puts topic, payload
+      now = Time.now.utc
+#      puts messages / (now.to_f - start_time) if messages % 1_000 == 0
+      connection.publish! "world", "says hello back!", reply_to: "hello.reply" if topic == 'hello.in'
+      messages += 1
+    end
   end
+
+  Thread.new do
+    NatsClient::SimpleMessageStream.new(connection, "world").each do |topic, payload|
+      puts topic, payload
+    end
+  end
+
+  sleep 1000
 end
