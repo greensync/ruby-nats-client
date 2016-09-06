@@ -26,16 +26,25 @@ if ARGV.first == '--pub'
   end
 else
   Thread.new do
-    NatsClient::SimpleMessageStream.new(connection, "hello.>").each do |topic, payload|
-      puts topic, payload
+    NatsClient::QueuedMessageStream.new(connection, "hello.>").each do |topic, payload, reply_to|
+      puts topic, payload, reply_to
       now = Time.now.utc
 #      puts messages / (now.to_f - start_time) if messages % 1_000 == 0
-      connection.publish! "world", "says hello back!", reply_to: "hello.reply" if topic == 'hello.in'
+      # connection.publish! "world", "says hello back!", reply_to: "hello.reply" if topic == 'hello.in'
       messages += 1
     end
   end
 
-  NatsClient::SimpleMessageStream.new(connection, "world").each do |topic, payload|
-    puts topic, payload
+  Thread.new do
+    NatsClient::QueuedMessageStream.new(connection, "world").each do |topic, payload, reply_to|
+      puts topic, payload, reply_to
+
+      connection.publish!(reply_to, "my response") if reply_to
+    end
+  end
+
+  loop do
+    puts NatsClient::QueuedRequest.new(connection).request!("world", "my request")
+    sleep 1
   end
 end

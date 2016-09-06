@@ -124,7 +124,7 @@ class NatsClient::Connection
     subscription = @subscriptions.fetch(message_info.fetch(:subscription_id), nil)
 
     if subscription
-      subscription.block.call(message_info.fetch(:topic), message_info.fetch(:payload)) if subscription.block
+      subscription.block.call(message_info.fetch(:topic), message_info.fetch(:payload), message_info.fetch(:reply_to, nil)) if subscription.block
     else
       @sender.unsub!(message_info.fetch(:subscription_id))
     end
@@ -189,28 +189,7 @@ class NatsClient::Connection
 
 end
 
-class NatsClient::MessageStream
-
-  def publish!(topic, payload, options = {})
-    raise NotImplementedError.new(__method__)
-  end
-
-  # returns subscription_id
-  def subscribe!(topic_filter, options = {})
-    raise NotImplementedError.new(__method__)
-  end
-
-  def unsubscribe!(subscription_id)
-    raise NotImplementedError.new(__method__)
-  end
-
-  def each(topic_filter)
-    raise NotImplementedError.new(__method__)
-  end
-
-end
-
-class NatsClient::SimpleMessageStream < NatsClient::MessageStream
+class NatsClient::QueuedMessageStream
 
   MAX_MESSAGES = 100
 
@@ -221,12 +200,33 @@ class NatsClient::SimpleMessageStream < NatsClient::MessageStream
 
   def each
     queue = Queue.new
-    subscription_id = @connection.subscribe!(@topic_filter) { |topic, payload| queue << [topic, payload] unless queue.size > MAX_MESSAGES }
+    subscription_id = @connection.subscribe!(@topic_filter) { |topic, payload, reply_to| queue << [topic, payload, reply_to] unless queue.size > MAX_MESSAGES }
 
     loop do
-      topic, payload = queue.pop
-      yield topic, payload
+      topic, payload, reply_to = queue.pop
+      yield topic, payload, reply_to
     end
+  ensure
+    @connection.unsubscribe!(subscription_id) if subscription_id
+  end
+
+end
+
+class NatsClient::QueuedRequest
+
+  def initialize(connection)
+    @connection = connection
+  end
+
+  def request!(topic, request_payload)
+    queue = Queue.new
+    reply_topic = "INBOX.#{Thread.current.object_id}.#{SecureRandom.hex(13)}"
+    subscription_id = @connection.subscribe!(reply_topic) { |topic, payload| queue << [topic, payload] unless queue.size > 1 }
+
+    @connection.publish!(topic, request_payload, reply_to: reply_topic)
+
+    topic, response_payload = queue.pop
+    response_payload
   ensure
     @connection.unsubscribe!(subscription_id) if subscription_id
   end

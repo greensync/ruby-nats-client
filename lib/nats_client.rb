@@ -4,6 +4,7 @@ module NatsClient; end
 
 require 'io/wait'
 require 'thread'
+require 'securerandom'
 
 require 'json'
 
