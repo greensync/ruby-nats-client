@@ -49,7 +49,7 @@ class NatsClient::PooledConnector
 
 end
 
-# class NatsClient::ActualConnectionconnector
+# class NatsClient::ActualConnection
 #
 #   def initialize(stream)
 #     @stream = stream
@@ -68,28 +68,32 @@ class NatsClient::Connection
     @connector = connector
     @subscriptions = NatsClient::SubscriptionManager.new
 
-    @mutex = Mutex.new
+    @sender_mutex = Mutex.new
+    @live = Concurrent::AtomicBoolean.new(false)
+    @stream = StringIO.new
+    @stream.close   # so that it's never null
+    @sender = NatsClient::Sender.new(@stream)
     @receiver = NatsClient::Receiver.new
   end
 
   def publish!(topic, payload, options = {})
-    retry_until_open { @sender.pub!(topic, payload, options) }
+    retry_forever { @sender.pub!(topic, payload, options) }
   end
 
   def subscribe!(topic_filter, options = {}, &block)
     subscription_id = @subscriptions.add!(topic_filter, options, block)
-    retry_until_open { @sender.sub!(topic_filter, subscription_id, options) }
+    try_once { @sender.sub!(topic_filter, subscription_id, options) }
     subscription_id
   end
 
   def unsubscribe!(subscription_id)
     @subscriptions.remove!(subscription_id)
-    retry_until_open { @sender.unsub!(subscription_id) }
+    try_once { @sender.unsub!(subscription_id) }
   end
 
   def run!
     loop do
-      connect! if closed?
+      connect! unless live?
 
       bytes = read_bytes
       next unless bytes
@@ -97,12 +101,11 @@ class NatsClient::Connection
       @receiver.parse!(bytes) do |event, info|
         case event
         when :info_received
-          puts info
           @server_info = info
         when :msg_received
-          try_or_close { @sender.unsub!(info.fetch(:subscription_id)) } unless @subscriptions.notify!(info)
+          try_once { @sender.unsub!(info.fetch(:subscription_id)) } unless @subscriptions.notify!(info)
         when :ping_received
-          try_or_close { @sender.pong! }
+          try_once { @sender.pong! }
         when :protocol_error
           STDERR.puts "Protocol Error: #{info.fetch(:message)}"
           close!
@@ -114,33 +117,26 @@ class NatsClient::Connection
 
   private
 
-  def closed?
-    @mutex.synchronize do
-      @stream.nil? || @stream.closed?
-    end
+  def live?
+    @live.true?
   end
 
-  def close!
-    puts "CLOSE"
-
-    @mutex.synchronize do
-      @stream.close if @stream && !@stream.closed?
-      @stream = @sender = @server_info = nil
-    end
+  def dead!
+    @live.make_false
   end
 
   def connect!
-    puts "RECONNECT"
-
-    @mutex.synchronize do
-      raise "already connected" unless @stream.nil? || @stream.closed?
+    @sender_mutex.synchronize do
+      dead!
+      @stream.close unless @stream.closed?
 
       @stream = @connector.open!
       @sender = NatsClient::Sender.new(@stream)
       @receiver.reset!
+      @live.make_true
     end
 
-    try_or_close do
+    try_once do
       @sender.connect!({})
       @subscriptions.each do |topic_filter, subscription_id, options|
         @sender.sub!(topic_filter, subscription_id, options)
@@ -148,7 +144,7 @@ class NatsClient::Connection
     end
 
   rescue Errno::ECONNREFUSED
-    close!
+    dead!
     sleep 1
     retry
   end
@@ -156,29 +152,26 @@ class NatsClient::Connection
   def read_bytes
     @stream.readpartial(NatsClient::Receiver::MAX_BUFFER)
 
-  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
+  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} read_bytes closing"
-    close!
+    dead!
     nil
   end
 
-  def try_or_close
-    @mutex.synchronize { yield }
-  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
+  def try_once
+    return unless live?
+    @sender_mutex.synchronize { yield }
+  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} try or close retry"
-    close!
+    dead!
   end
 
-  def wait_until_open
-    sleep 0.1 while closed?
-  end
-
-  def retry_until_open
-    wait_until_open
-    @mutex.synchronize { yield }
-  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
+  def retry_forever
+    sleep 0.1 until live?
+    @sender_mutex.synchronize { yield }
+  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} retry until open"
-    close!
+    dead!
     retry
   end
 
