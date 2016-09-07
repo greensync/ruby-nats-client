@@ -7,6 +7,7 @@ require 'thread'
 require 'securerandom'
 
 require 'json'
+require 'concurrent'
 
 require_relative 'nats_client/version'
 require_relative 'nats_client/sender'

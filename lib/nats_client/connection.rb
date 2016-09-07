@@ -34,8 +34,8 @@ class NatsClient::Connection
     @connectors = connectors
     @connector_index = 0
 
-    @next_subscription_id = "A1"
-    @subscriptions = {}
+    @next_subscription_id = Concurrent::AtomicFixnum.new(0)
+    @subscriptions = Concurrent::Map.new
 
     @mutex = Mutex.new
 
@@ -71,7 +71,7 @@ class NatsClient::Connection
     try_or_close do
       @sender.connect!({})
 
-      @subscriptions.each do |subscription_id, subscription|
+      @subscriptions.each_pair do |subscription_id, subscription|
         @sender.sub!(subscription.topic_filter, subscription_id, subscription.options)
       end
     end
@@ -126,7 +126,7 @@ class NatsClient::Connection
     if subscription
       subscription.block.call(message_info.fetch(:topic), message_info.fetch(:payload), message_info.fetch(:reply_to, nil)) if subscription.block
     else
-      @sender.unsub!(message_info.fetch(:subscription_id))
+      try_or_close { @sender.unsub!(message_info.fetch(:subscription_id)) }
     end
   end
 
@@ -151,9 +151,7 @@ class NatsClient::Connection
   end
 
   def generate_subscription_id!
-    subid = @next_subscription_id
-    @next_subscription_id = @next_subscription_id.succ
-    subid
+    @next_subscription_id.increment.to_s(36)
   end
 
   def try_or_close
@@ -219,14 +217,13 @@ class NatsClient::QueuedRequest
   end
 
   def request!(topic, request_payload)
-    queue = Queue.new
-    reply_topic = "INBOX.#{Thread.current.object_id}.#{SecureRandom.hex(13)}"
-    subscription_id = @connection.subscribe!(reply_topic) { |topic, payload| queue << [topic, payload] unless queue.size > 1 }
+    future = Concurrent::IVar.new
+    reply_topic = "INBOX.#{Thread.current.object_id.to_s(36)}.#{SecureRandom.hex(4)}"
+    subscription_id = @connection.subscribe!(reply_topic) { |topic, payload| future.try_set(payload) }
 
     @connection.publish!(topic, request_payload, reply_to: reply_topic)
 
-    topic, response_payload = queue.pop
-    response_payload
+    future.value
   ensure
     @connection.unsubscribe!(subscription_id) if subscription_id
   end
