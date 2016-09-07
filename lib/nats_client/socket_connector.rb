@@ -5,12 +5,16 @@ class NatsClient::SocketConnector
   attr_reader :host, :port
 
   def initialize(host = '127.0.0.1', port = 4222)
-    @host = host
-    @port = port
+    @host = host.freeze
+    @port = port.freeze
+    freeze
   end
 
   def open!
     TCPSocket.new(@host, @port)
+
+  rescue Errno::ECONNREFUSED
+    nil
   end
 
 end

@@ -62,7 +62,7 @@ class NatsClient::Connection
 
   def reconnect!
     current_conn.close!
-    @conn.set(NatsClient::ServerConnection.new(@connector.open!))
+    @conn.set(NatsClient::ServerConnection.new(connect_until_connected))
 
     try_once do
       current_conn.connect!({})
@@ -70,10 +70,14 @@ class NatsClient::Connection
         current_conn.sub!(topic_filter, subscription_id, options)
       end
     end
+  end
 
-  rescue Errno::ECONNREFUSED
-    sleep CONNECTION_RETRY_INTERVAL
-    retry
+  def connect_until_connected
+    loop do
+      new_socket = @connector.open!
+      return new_socket if new_socket
+      sleep CONNECTION_RETRY_INTERVAL
+    end
   end
 
   def try_once
