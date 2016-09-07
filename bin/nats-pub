@@ -10,8 +10,12 @@ start_time = Time.now.utc.to_f - 1
 messages = 0
 
 connection = NatsClient::Connection.new(
-  NatsClient::SocketConnector.new('localhost', 4222),
-  NatsClient::SocketConnector.new('localhost', 4223)
+  NatsClient::PooledConnector.new(
+    [
+      NatsClient::SocketConnector.new('localhost', 4222),
+      NatsClient::SocketConnector.new('localhost', 4223)
+    ]
+  )
 )
 
 Thread.new { connection.run! }

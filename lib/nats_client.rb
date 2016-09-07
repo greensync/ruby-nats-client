@@ -13,4 +13,5 @@ require_relative 'nats_client/version'
 require_relative 'nats_client/sender'
 require_relative 'nats_client/receiver'
 
+require_relative 'nats_client/subscription_manager'
 require_relative 'nats_client/connection'

@@ -15,30 +15,55 @@ class NatsClient::SocketConnector
 
 end
 
-class NatsClient::Connection
+# NOT THREAD SAFE
+class NatsClient::PooledConnector
 
-  class Subscription
-    attr_reader :topic_filter, :options, :block
-
-    def initialize(topic_filter, options, block)
-      @topic_filter = topic_filter
-      @options = options
-      @block = block
-      freeze
-    end
+  def initialize(connectors)
+    @connectors = connectors
+    @last_connector = @current_connector = nil
   end
+
+  def open!
+    open_first!(shuffled_connectors)
+  end
+
+  private
+
+  # randomized, don't use the last one we connected to unless we have to (i.e. only one option)
+  def shuffled_connectors
+    (@connectors - [@last_connector]).shuffle << @last_connector
+  end
+
+  def open_first!(connectors)
+    connectors.shift.open!
+
+  rescue Errno::ECONNREFUSED
+    puts $!
+    retry unless connectors.empty?
+  end
+
+end
+
+# class NatsClient::ActualConnectionconnector
+#
+#   def initialize(stream)
+#     @stream = stream
+#     @receiver = NatsClient::Receiver.new
+#     @sender = NatsClient::Sender.new(@stream)
+#   end
+#
+# end
+#
+
+class NatsClient::Connection
 
   CONNECTION_MAX_TIMEOUT = 365 * 24 * 60 * 60   # a year...
 
-  def initialize(*connectors)
-    @connectors = connectors
-    @connector_index = 0
-
-    @next_subscription_id = Concurrent::AtomicFixnum.new(0)
-    @subscriptions = Concurrent::Map.new
+  def initialize(connector)
+    @connector = connector
+    @subscriptions = NatsClient::SubscriptionManager.new
 
     @mutex = Mutex.new
-
     @receiver = NatsClient::Receiver.new
   end
 
@@ -63,18 +88,22 @@ class NatsClient::Connection
     @mutex.synchronize do
       raise "already connected" unless @stream.nil? || @stream.closed?
 
-      @stream = next_connector!.open!
+      @stream = @connector.open!
       @sender = NatsClient::Sender.new(@stream)
       @receiver.reset!
     end
 
     try_or_close do
       @sender.connect!({})
-
-      @subscriptions.each_pair do |subscription_id, subscription|
-        @sender.sub!(subscription.topic_filter, subscription_id, subscription.options)
+      @subscriptions.each do |topic_filter, subscription_id, options|
+        @sender.sub!(topic_filter, subscription_id, options)
       end
     end
+
+  rescue Errno::ECONNREFUSED
+    close!
+    sleep 1
+    retry
   end
 
   def publish!(topic, payload, options = {})
@@ -82,21 +111,20 @@ class NatsClient::Connection
   end
 
   def subscribe!(topic_filter, options = {}, &block)
-    subscription_id = generate_subscription_id!
-
-    @subscriptions[subscription_id] = Subscription.new(topic_filter, options, block)
+    subscription_id = @subscriptions.add!(topic_filter, options, block)
     retry_until_open { @sender.sub!(topic_filter, subscription_id, options) }
-
     subscription_id
   end
 
   def unsubscribe!(subscription_id)
-    @subscriptions.delete(subscription_id)
+    @subscriptions.remove!(subscription_id)
     retry_until_open { @sender.unsub!(subscription_id) }
   end
 
   def run!
     loop do
+      connect! if closed?
+
       bytes = read_bytes
       next unless bytes
 
@@ -106,7 +134,7 @@ class NatsClient::Connection
           puts info
           @server_info = info
         when :msg_received
-          notify_subscriptions(info)
+          try_or_close { @sender.unsub!(info.fetch(:subscription_id)) } unless @subscriptions.notify!(info)
         when :ping_received
           try_or_close { @sender.pong! }
         when :protocol_error
@@ -120,26 +148,14 @@ class NatsClient::Connection
 
   private
 
-  def notify_subscriptions(message_info)
-    subscription = @subscriptions.fetch(message_info.fetch(:subscription_id), nil)
-
-    if subscription
-      subscription.block.call(message_info.fetch(:topic), message_info.fetch(:payload), message_info.fetch(:reply_to, nil)) if subscription.block
-    else
-      try_or_close { @sender.unsub!(message_info.fetch(:subscription_id)) }
-    end
-  end
-
   def read_bytes
-    connect! if closed?
-
     unless @stream.ready?
       wait_readable(@stream)
     end
 
     @stream.read_nonblock(NatsClient::Receiver::MAX_BUFFER)
 
-  rescue Errno::EPIPE, Errno::ECONNRESET, Errno::ECONNREFUSED, EOFError
+  rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} read_bytes closing"
     close!
     sleep 1
@@ -148,10 +164,6 @@ class NatsClient::Connection
   rescue IO::WaitReadable
     sleep 0.1
     retry
-  end
-
-  def generate_subscription_id!
-    @next_subscription_id.increment.to_s(36)
   end
 
   def try_or_close
@@ -172,12 +184,6 @@ class NatsClient::Connection
     STDERR.puts "#{$!} retry until open"
     close!
     retry
-  end
-
-  def next_connector!
-    connector = @connectors[@connector_index]
-    @connector_index = (@connector_index + 1) % @connectors.length
-    connector
   end
 
   # JRuby 1.7 doesn't seem to have IO.wait
