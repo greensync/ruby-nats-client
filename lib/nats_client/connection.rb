@@ -1,177 +1,91 @@
 # Copyright (c) 2016 GreenSync Pty Ltd.  All rights reserved.
 
-class NatsClient::SocketConnector
-
-  attr_reader :host, :port
-
-  def initialize(host = '127.0.0.1', port = 4222)
-    @host = host
-    @port = port
-  end
-
-  def open!
-    TCPSocket.new(@host, @port)
-  end
-
-end
-
-# NOT THREAD SAFE
-class NatsClient::PooledConnector
-
-  def initialize(connectors)
-    @connectors = connectors
-    @last_connector = @current_connector = nil
-  end
-
-  def open!
-    open_first!(shuffled_connectors)
-  end
-
-  private
-
-  # randomized, don't use the last one we connected to unless we have to (i.e. only one option)
-  def shuffled_connectors
-    result = (@connectors - [@last_connector]).shuffle
-    result << @last_connector if @last_connector
-    result
-  end
-
-  def open_first!(connectors)
-    connectors.shift.open!
-
-  rescue Errno::ECONNREFUSED
-    if connectors.empty?
-      raise
-    else
-      retry
-    end
-  end
-
-end
-
-# class NatsClient::ActualConnection
-#
-#   def initialize(stream)
-#     @stream = stream
-#     @receiver = NatsClient::Receiver.new
-#     @sender = NatsClient::Sender.new(@stream)
-#   end
-#
-# end
-#
-
 class NatsClient::Connection
 
-  CONNECTION_MAX_TIMEOUT = 365 * 24 * 60 * 60   # a year...
+  CONNECTION_RETRY_INTERVAL = 1
+  OPERATION_RETRY_INTERVAL = 0.2
 
   def initialize(connector)
     @connector = connector
     @subscriptions = NatsClient::SubscriptionManager.new
 
-    @sender_mutex = Mutex.new
-    @live = Concurrent::AtomicBoolean.new(false)
-    @stream = StringIO.new
-    @stream.close   # so that it's never null
-    @sender = NatsClient::Sender.new(@stream)
-    @receiver = NatsClient::Receiver.new
+    @conn = Concurrent::AtomicReference.new(NatsClient::ServerConnection.empty)
+    @server_info = nil
   end
 
   def publish!(topic, payload, options = {})
-    retry_forever { @sender.pub!(topic, payload, options) }
+    retry_forever { current_conn.pub!(topic, payload, options) }
   end
 
   def subscribe!(topic_filter, options = {}, &block)
     subscription_id = @subscriptions.add!(topic_filter, options, block)
-    try_once { @sender.sub!(topic_filter, subscription_id, options) }
+    retry_forever { current_conn.sub!(topic_filter, subscription_id, options) }
     subscription_id
   end
 
   def unsubscribe!(subscription_id)
     @subscriptions.remove!(subscription_id)
-    try_once { @sender.unsub!(subscription_id) }
+    try_once { current_conn.unsub!(subscription_id) }
+  end
+
+  def live?
+    current_conn.live?
   end
 
   def run!
     loop do
-      connect! unless live?
+      reconnect! unless live?
 
-      bytes = read_bytes
-      next unless bytes
-
-      @receiver.parse!(bytes) do |event, info|
+      current_conn.parse! do |event, info|
         case event
         when :info_received
           @server_info = info
         when :msg_received
-          try_once { @sender.unsub!(info.fetch(:subscription_id)) } unless @subscriptions.notify!(info)
+          try_once { current_conn.unsub!(info.fetch(:subscription_id)) } unless @subscriptions.notify!(info)
         when :ping_received
-          try_once { @sender.pong! }
-        when :protocol_error
+          try_once { current_conn.pong! }
+        when :protocol_error, :connection_dead
           STDERR.puts "Protocol Error: #{info.fetch(:message)}"
-          close!
-          break
         end
       end
     end
+
+  ensure
+    current_conn.close!
   end
 
   private
 
-  def live?
-    @live.true?
+  def current_conn
+    @conn.get
   end
 
-  def dead!
-    @live.make_false
-  end
-
-  def connect!
-    @sender_mutex.synchronize do
-      dead!
-      @stream.close unless @stream.closed?
-
-      @stream = @connector.open!
-      @sender = NatsClient::Sender.new(@stream)
-      @receiver.reset!
-      @live.make_true
-    end
+  def reconnect!
+    current_conn.close!
+    @conn.set(NatsClient::ServerConnection.new(@connector.open!))
 
     try_once do
-      @sender.connect!({})
+      current_conn.connect!({})
       @subscriptions.each do |topic_filter, subscription_id, options|
-        @sender.sub!(topic_filter, subscription_id, options)
+        current_conn.sub!(topic_filter, subscription_id, options)
       end
     end
 
   rescue Errno::ECONNREFUSED
-    dead!
-    sleep 1
+    sleep CONNECTION_RETRY_INTERVAL
     retry
   end
 
-  def read_bytes
-    @stream.readpartial(NatsClient::Receiver::MAX_BUFFER)
-
-  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
-    STDERR.puts "#{$!} read_bytes closing"
-    dead!
-    nil
-  end
-
   def try_once
-    return unless live?
-    @sender_mutex.synchronize { yield }
-  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
-    STDERR.puts "#{$!} try or close retry"
-    dead!
+    yield
+  rescue NatsClient::ServerConnection::ConnectionDead
+    # oh well, we tried
   end
 
   def retry_forever
-    sleep 0.1 until live?
-    @sender_mutex.synchronize { yield }
-  rescue IOError, Errno::EPIPE, Errno::ECONNRESET, EOFError
-    STDERR.puts "#{$!} retry until open"
-    dead!
+    yield
+  rescue NatsClient::ServerConnection::ConnectionDead
+    sleep OPERATION_RETRY_INTERVAL until live?
     retry
   end
 

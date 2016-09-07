@@ -14,4 +14,7 @@ require_relative 'nats_client/sender'
 require_relative 'nats_client/receiver'
 
 require_relative 'nats_client/subscription_manager'
+require_relative 'nats_client/server_connection'
+require_relative 'nats_client/socket_connector'
+require_relative 'nats_client/pooled_connector'
 require_relative 'nats_client/connection'
