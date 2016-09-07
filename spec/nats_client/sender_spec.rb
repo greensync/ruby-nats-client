@@ -86,15 +86,15 @@ describe NatsClient::Sender do
 
     end
 
-    context "with ASCII-8BIT payload" do
-
-      let(:payload) { "\u{1f4a9}".force_encoding('ascii-8bit') }
-
-      it "should use the byte size" do
-        expect { subject }.to raise_error(NatsClient::Sender::InvalidPayloadEncodingError, payload.encoding.name)
-      end
-
-    end
+    # context "with ASCII-8BIT payload" do
+    #
+    #   let(:payload) { "\u{1f4a9}".force_encoding('ascii-8bit') }
+    #
+    #   it "should use the byte size" do
+    #     expect { subject }.to raise_error(NatsClient::Sender::InvalidPayloadEncodingError, payload.encoding.name)
+    #   end
+    #
+    # end
 
   end
 
