@@ -72,45 +72,6 @@ class NatsClient::Connection
     @receiver = NatsClient::Receiver.new
   end
 
-  def closed?
-    @mutex.synchronize do
-      @stream.nil? || @stream.closed?
-    end
-  end
-
-  def close!
-    puts "CLOSE"
-
-    @mutex.synchronize do
-      @stream.close if @stream && !@stream.closed?
-      @stream = @sender = @server_info = nil
-    end
-  end
-
-  def connect!
-    puts "RECONNECT"
-
-    @mutex.synchronize do
-      raise "already connected" unless @stream.nil? || @stream.closed?
-
-      @stream = @connector.open!
-      @sender = NatsClient::Sender.new(@stream)
-      @receiver.reset!
-    end
-
-    try_or_close do
-      @sender.connect!({})
-      @subscriptions.each do |topic_filter, subscription_id, options|
-        @sender.sub!(topic_filter, subscription_id, options)
-      end
-    end
-
-  rescue Errno::ECONNREFUSED
-    close!
-    sleep 1
-    retry
-  end
-
   def publish!(topic, payload, options = {})
     retry_until_open { @sender.pub!(topic, payload, options) }
   end
@@ -153,21 +114,52 @@ class NatsClient::Connection
 
   private
 
-  def read_bytes
-    unless @stream.ready?
-      wait_readable(@stream)
+  def closed?
+    @mutex.synchronize do
+      @stream.nil? || @stream.closed?
+    end
+  end
+
+  def close!
+    puts "CLOSE"
+
+    @mutex.synchronize do
+      @stream.close if @stream && !@stream.closed?
+      @stream = @sender = @server_info = nil
+    end
+  end
+
+  def connect!
+    puts "RECONNECT"
+
+    @mutex.synchronize do
+      raise "already connected" unless @stream.nil? || @stream.closed?
+
+      @stream = @connector.open!
+      @sender = NatsClient::Sender.new(@stream)
+      @receiver.reset!
     end
 
-    @stream.read_nonblock(NatsClient::Receiver::MAX_BUFFER)
+    try_or_close do
+      @sender.connect!({})
+      @subscriptions.each do |topic_filter, subscription_id, options|
+        @sender.sub!(topic_filter, subscription_id, options)
+      end
+    end
+
+  rescue Errno::ECONNREFUSED
+    close!
+    sleep 1
+    retry
+  end
+
+  def read_bytes
+    @stream.readpartial(NatsClient::Receiver::MAX_BUFFER)
 
   rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} read_bytes closing"
     close!
     nil
-
-  rescue IO::WaitReadable
-    sleep 0.1
-    retry
   end
 
   def try_or_close
@@ -188,11 +180,6 @@ class NatsClient::Connection
     STDERR.puts "#{$!} retry until open"
     close!
     retry
-  end
-
-  # JRuby 1.7 doesn't seem to have IO.wait
-  def wait_readable(stream)
-    IO.select([stream])
   end
 
 end
