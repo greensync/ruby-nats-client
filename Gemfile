@@ -2,6 +2,10 @@
 
 source 'https://rubygems.org'
 
-gem 'concurrent-ruby-ext'
-
 gemspec
+
+gem 'rake'
+gem 'rspec', '~> 3.0'
+
+gem 'concurrent-ruby-ext'
+gem 'simplecov', :require => false, :group => :test

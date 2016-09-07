@@ -14,8 +14,6 @@ Gem::Specification.new do |s|
 
   s.add_dependency 'json', '~> 1'
   s.add_dependency 'concurrent-ruby', '~> 1.0'
-  s.add_development_dependency 'rake'
-  s.add_development_dependency 'rspec', '~> 3.0'
 
   s.required_ruby_version = '>= 1.9.3'
 
