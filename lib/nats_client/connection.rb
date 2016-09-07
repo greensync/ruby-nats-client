@@ -31,15 +31,20 @@ class NatsClient::PooledConnector
 
   # randomized, don't use the last one we connected to unless we have to (i.e. only one option)
   def shuffled_connectors
-    (@connectors - [@last_connector]).shuffle << @last_connector
+    result = (@connectors - [@last_connector]).shuffle
+    result << @last_connector if @last_connector
+    result
   end
 
   def open_first!(connectors)
     connectors.shift.open!
 
   rescue Errno::ECONNREFUSED
-    puts $!
-    retry unless connectors.empty?
+    if connectors.empty?
+      raise
+    else
+      retry
+    end
   end
 
 end
@@ -158,8 +163,7 @@ class NatsClient::Connection
   rescue Errno::EPIPE, Errno::ECONNRESET, EOFError
     STDERR.puts "#{$!} read_bytes closing"
     close!
-    sleep 1
-    retry
+    nil
 
   rescue IO::WaitReadable
     sleep 0.1
