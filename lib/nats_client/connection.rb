@@ -62,14 +62,19 @@ class NatsClient::Connection
 
   def reconnect!
     current_conn.close!
-    @conn.set(NatsClient::ServerConnection.new(connect_until_connected))
 
-    try_once do
-      current_conn.connect!({})
-      @subscriptions.each do |topic_filter, subscription_id, options|
-        current_conn.sub!(topic_filter, subscription_id, options)
-      end
-    end
+    new_connection = NatsClient::ServerConnection.new(connect_until_connected)
+                        .connect!({})
+                        .multi_sub!(@subscriptions)
+
+    raise NatsClient::ServerConnection::ConnectionDead.new
+
+    @conn.set(new_connection)
+
+  rescue NatsClient::ServerConnection::ConnectionDead
+    new_connection.close! if new_connection
+    sleep CONNECTION_RETRY_INTERVAL
+    retry
   end
 
   def connect_until_connected

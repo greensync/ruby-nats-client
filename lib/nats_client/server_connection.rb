@@ -17,9 +17,20 @@ class NatsClient::ServerConnection
   end
 
   %w(pub! sub! unsub! connect! pong!).each do |method_name|
-    eval "def #{method_name}(*args); sync_protect { @sender.#{method_name}(*args) }; end"
+    eval "def #{method_name}(*args); sync_protect { @sender.#{method_name}(*args) }; self; end"
   end
 
+  def multi_sub!(subs)
+    sync_protect do
+      subs.each do |*sub|
+        @sender.sub!(*sub)
+      end
+    end
+
+    self
+  end
+
+  # not thread safe
   def parse!(&block)
     dead!($!, &block) unless live?
 
@@ -32,7 +43,11 @@ class NatsClient::ServerConnection
 
   def close!
     @live.make_false
-    @stream.close unless @stream.closed?
+
+    unless @stream.closed?
+      @stream.shutdown if @stream.respond_to?(:shutdown)
+      @stream.close
+    end
   end
 
   def self.empty
