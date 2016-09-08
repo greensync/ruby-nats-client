@@ -35,6 +35,7 @@ class NatsClient::Sender
 
   def connect!(info)
     @stream << CONNECT_SPACE << JSON.generate(DEFAULT_CONNECT_OPTIONS.merge(info)) << CR_LF
+    @stream.flush
 
     self
   end
@@ -49,6 +50,7 @@ class NatsClient::Sender
     @stream << PUB_SPACE << topic << SPACE
     @stream << reply_topic << SPACE if reply_topic
     @stream << payload.bytesize << CR_LF << payload << CR_LF
+    @stream.flush
 
     self
   end
@@ -63,6 +65,7 @@ class NatsClient::Sender
     @stream << SUB_SPACE << topic << SPACE
     @stream << queue_group << SPACE if queue_group
     @stream << subscription_id << CR_LF
+    @stream.flush
 
     self
   end
@@ -76,16 +79,19 @@ class NatsClient::Sender
     @stream << UNSUB_SPACE << subscription_id
     @stream << SPACE << max_msgs if max_msgs
     @stream << CR_LF
+    @stream.flush
 
     self
   end
 
   def ping!
     @stream << PING_CR_LF
+    @stream.flush
   end
 
   def pong!
     @stream << PONG_CR_LF
+    @stream.flush
   end
 
   private
