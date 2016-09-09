@@ -13,7 +13,7 @@ class NatsClient::SocketConnector
   def open!
     TCPSocket.new(@host, @port)
 
-  rescue Errno::ECONNREFUSED
+  rescue Errno::ECONNREFUSED, Errno::ECONNRESET
     nil
   end
 

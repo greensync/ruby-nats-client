@@ -16,17 +16,12 @@ class NatsClient::ServerConnection
     @live.true?
   end
 
-  %w(pub! sub! unsub! connect! pong!).each do |method_name|
+  %w(pub! sub! multi_sub! unsub! connect! pong!).each do |method_name|
     eval "def #{method_name}(*args); sync_protect { @sender.#{method_name}(*args) }; self; end"
   end
 
-  def multi_sub!(subs)
-    sync_protect do
-      subs.each do |*sub|
-        @sender.sub!(*sub)
-      end
-    end
-
+  def batch
+    sync_protect { yield @sender }
     self
   end
 
@@ -45,7 +40,7 @@ class NatsClient::ServerConnection
     @live.make_false
 
     unless @stream.closed?
-      @stream.shutdown if @stream.respond_to?(:shutdown)
+      (@stream.shutdown rescue nil) if @stream.respond_to?(:shutdown)
       @stream.close
     end
   end

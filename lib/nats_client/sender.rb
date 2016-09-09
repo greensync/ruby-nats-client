@@ -70,6 +70,14 @@ class NatsClient::Sender
     self
   end
 
+  def multi_sub!(subs)
+    subs.each do |args|
+      sub!(*args)
+    end
+
+    self
+  end
+
   def unsub!(subscription_id, options = {})
     max_msgs = options.fetch(:max_msgs, nil)
 

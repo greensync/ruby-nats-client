@@ -18,7 +18,7 @@ class NatsClient::SubscriptionManager
     @subscriptions = Concurrent::Map.new
   end
 
-  def add!(topic_filter, options, block)
+  def add!(topic_filter, options = {}, &block)
     subscription_id = generate_subscription_id!
     @subscriptions[subscription_id] = Subscription.new(topic_filter, options, block)
     subscription_id
@@ -43,7 +43,7 @@ class NatsClient::SubscriptionManager
 
   def each
     @subscriptions.each_pair do |subscription_id, subscription|
-      yield subscription.topic_filter, subscription_id, subscription.options
+      yield [subscription.topic_filter, subscription_id, subscription.options]
     end
   end
 

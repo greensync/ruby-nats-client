@@ -18,7 +18,7 @@ class NatsClient::Connection
   end
 
   def subscribe!(topic_filter, options = {}, &block)
-    subscription_id = @subscriptions.add!(topic_filter, options, block)
+    subscription_id = @subscriptions.add!(topic_filter, options, &block)
     retry_forever { current_conn.sub!(topic_filter, subscription_id, options) }
     subscription_id
   end
@@ -26,6 +26,25 @@ class NatsClient::Connection
   def unsubscribe!(subscription_id)
     @subscriptions.remove!(subscription_id)
     try_once { current_conn.unsub!(subscription_id) }
+  end
+
+  def request!(topic, request_payload)
+    # TODO some sort of expiry on the subscription?
+    reply_topic = "INBOX.#{Thread.current.object_id.to_s(36)}.#{SecureRandom.hex(4)}"
+
+    subscription_id = @subscriptions.add!(reply_topic) do |topic, response_payload|
+      unsubscribe!(subscription_id)
+      yield(response_payload)
+    end
+
+    retry_forever do
+      current_conn.batch do |c|
+        c.sub!(reply_topic, subscription_id)
+        c.pub!(topic, request_payload, reply_to: reply_topic)
+      end
+    end
+
+    subscription_id
   end
 
   def live?
@@ -64,10 +83,12 @@ class NatsClient::Connection
     current_conn.close!
 
     new_connection = NatsClient::ServerConnection.new(connect_until_connected)
-                        .connect!({})
-                        .multi_sub!(@subscriptions)
+    new_connection.batch do |c|
+      c.connect!({})
+      c.multi_sub!(@subscriptions)
+    end
 
-    raise NatsClient::ServerConnection::ConnectionDead.new
+    # raise NatsClient::ServerConnection::ConnectionDead.new
 
     @conn.set(new_connection)
 
@@ -130,15 +151,19 @@ class NatsClient::QueuedRequest
   end
 
   def request!(topic, request_payload)
+  #   future = Concurrent::IVar.new
+  #   reply_topic = "INBOX.#{Thread.current.object_id.to_s(36)}.#{SecureRandom.hex(4)}"
+  #   subscription_id = @connection.subscribe!(reply_topic) { |topic, payload| future.try_set(payload) }
+  #
+  #   @connection.publish!(topic, request_payload, reply_to: reply_topic)
+  #
+  #   future.value
+  # ensure
+  #   @connection.unsubscribe!(subscription_id) if subscription_id
+
     future = Concurrent::IVar.new
-    reply_topic = "INBOX.#{Thread.current.object_id.to_s(36)}.#{SecureRandom.hex(4)}"
-    subscription_id = @connection.subscribe!(reply_topic) { |topic, payload| future.try_set(payload) }
-
-    @connection.publish!(topic, request_payload, reply_to: reply_topic)
-
+    @connection.request!(topic, request_payload) { |response_payload| future.try_set(response_payload) }
     future.value
-  ensure
-    @connection.unsubscribe!(subscription_id) if subscription_id
   end
 
 end
